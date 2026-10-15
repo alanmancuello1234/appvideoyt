@@ -25,13 +25,19 @@ from media_fetcher import find_clip_for_scene, download_file
 # Cuando pases a un plan pago con más memoria, se puede subir de nuevo.
 RESOLUCION = (854, 480)
 CARPETA_TEMP = "temp_assets"
+# DejaVu Sans soporta ñ y tildes; sin especificar fuente, la que usa
+# moviepy por defecto en el servidor no tiene esos caracteres cargados
+# (salen como cuadraditos). Se instala vía apt en el Dockerfile.
+FUENTE = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
 def _clip_de_respaldo(texto_escena: str, duracion: float):
-    """Plan B visual cuando no hay match en los bancos de video."""
+    """Plan B visual cuando no hay match en los bancos de video. Ya
+    incluye el texto grande centrado, así que NO hay que agregarle
+    además el subtítulo de abajo (quedaría duplicado/superpuesto)."""
     fondo = ColorClip(size=RESOLUCION, color=(20, 20, 30), duration=duracion)
     texto = (
-        TextClip(text=texto_escena, font_size=36, color="white",
+        TextClip(text=texto_escena, font=FUENTE, font_size=32, color="white",
                  size=(RESOLUCION[0] - 160, None), method="caption")
         .with_duration(duracion)
         .with_position("center")
@@ -41,7 +47,7 @@ def _clip_de_respaldo(texto_escena: str, duracion: float):
 
 def _subtitulo(texto_escena: str, duracion: float):
     return (
-        TextClip(text=texto_escena, font_size=28, color="white",
+        TextClip(text=texto_escena, font=FUENTE, font_size=24, color="white",
                  stroke_color="black", stroke_width=2,
                  size=(RESOLUCION[0] - 120, None), method="caption")
         .with_duration(duracion)
@@ -75,14 +81,17 @@ def construir_escena(escena: dict, idx: int) -> str:
         base = base.resized(RESOLUCION)
         fondo_visual = base
         licencia = clip_info["licencia"]
+        capas = [fondo_visual, _subtitulo(escena["texto"], duracion)]
     else:
+        # El plan B ya trae el texto completo centrado — agregar el
+        # subtítulo de abajo acá duplicaría el texto en pantalla.
         fondo_visual = _clip_de_respaldo(escena["texto"], duracion)
         licencia = "sin match en banco — usado respaldo local (sin riesgo de licencia)"
+        capas = [fondo_visual]
 
-    sub = _subtitulo(escena["texto"], duracion)
     audio_clip = AudioFileClip(audio_path)
     clips_a_cerrar.append(audio_clip)
-    escena_final = CompositeVideoClip([fondo_visual, sub]).with_audio(audio_clip)
+    escena_final = CompositeVideoClip(capas).with_audio(audio_clip)
 
     salida_path = os.path.join(CARPETA_TEMP, f"escena_{idx}_render.mp4")
     escena_final.write_videofile(
