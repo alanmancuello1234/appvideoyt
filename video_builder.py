@@ -10,16 +10,20 @@ el texto de la escena) para que el video nunca quede roto — exactamente
 el plan B que mencioné antes para cuando el banco no tiene match exacto.
 """
 import os
+import subprocess
 from moviepy import (
     VideoFileClip, ColorClip, TextClip, CompositeVideoClip,
-    concatenate_videoclips, AudioFileClip, vfx,
+    AudioFileClip, vfx,
 )
 
 from parser import build_scene_plan
 from tts import narrar_escena
 from media_fetcher import find_clip_for_scene, download_file
 
-RESOLUCION = (1280, 720)
+# 480p en vez de 720p: baja bastante el consumo de RAM/CPU durante el
+# procesamiento, clave para entrar en el plan free de Render (poca RAM).
+# Cuando pases a un plan pago con más memoria, se puede subir de nuevo.
+RESOLUCION = (854, 480)
 CARPETA_TEMP = "temp_assets"
 
 
@@ -45,20 +49,25 @@ def _subtitulo(texto_escena: str, duracion: float):
     )
 
 
-def construir_escena(escena: dict, idx: int):
-    """Arma UNA escena: audio narrado + clip visual + subtítulo quemado."""
+def construir_escena(escena: dict, idx: int) -> str:
+    """
+    Arma UNA escena (audio + visual + subtítulo), la renderiza a su
+    propio archivo .mp4, y cierra todos los clips para liberar RAM y
+    los procesos de ffmpeg que moviepy abre por detrás. Devuelve la
+    ruta del archivo ya renderizado, no el objeto en memoria.
+    """
     os.makedirs(CARPETA_TEMP, exist_ok=True)
     audio_path = os.path.join(CARPETA_TEMP, f"escena_{idx}.mp3")
     duracion = narrar_escena(escena["texto"], audio_path)
 
     clip_info = find_clip_for_scene(escena["keywords"])
+    clips_a_cerrar = []
 
     if clip_info:
-        video_path = os.path.join(CARPETA_TEMP, f"escena_{idx}.mp4")
+        video_path = os.path.join(CARPETA_TEMP, f"escena_{idx}_src.mp4")
         download_file(clip_info["url"], video_path)
         base = VideoFileClip(video_path).without_audio()
-        # Si el clip de stock es más corto que el audio, lo loopeamos;
-        # si es más largo, lo recortamos. Nunca queda desincronizado.
+        clips_a_cerrar.append(base)
         if base.duration < duracion:
             base = base.with_effects([vfx.Loop(duration=duracion)])
         else:
@@ -71,20 +80,52 @@ def construir_escena(escena: dict, idx: int):
         licencia = "sin match en banco — usado respaldo local (sin riesgo de licencia)"
 
     sub = _subtitulo(escena["texto"], duracion)
-    escena_final = CompositeVideoClip([fondo_visual, sub]).with_audio(
-        AudioFileClip(audio_path)
+    audio_clip = AudioFileClip(audio_path)
+    clips_a_cerrar.append(audio_clip)
+    escena_final = CompositeVideoClip([fondo_visual, sub]).with_audio(audio_clip)
+
+    salida_path = os.path.join(CARPETA_TEMP, f"escena_{idx}_render.mp4")
+    escena_final.write_videofile(
+        salida_path, fps=24, codec="libx264", audio_codec="aac",
+        preset="ultrafast",  # prioriza RAM/CPU bajos por sobre peso del archivo
+        logger=None,
     )
+
+    # Cerrar todo explícitamente: moviepy deja procesos de ffmpeg y
+    # buffers abiertos si no se cierran a mano, y eso es justo lo que
+    # acumula memoria escena tras escena.
+    escena_final.close()
+    for c in clips_a_cerrar:
+        c.close()
+
     print(f"  Escena {idx}: '{escena['texto'][:50]}...' | {duracion:.1f}s | {licencia}")
-    return escena_final
+    return salida_path
+
+
+def _concatenar_archivos(rutas: list[str], salida_mp4: str):
+    """
+    Concatena los .mp4 ya renderizados con el demuxer de ffmpeg
+    (copia los streams, no vuelve a decodificar/codificar) — mucho
+    más liviano en memoria que recargar todo en moviepy de nuevo.
+    """
+    lista_path = os.path.join(CARPETA_TEMP, "lista_concat.txt")
+    with open(lista_path, "w", encoding="utf-8") as f:
+        for ruta in rutas:
+            f.write(f"file '{os.path.abspath(ruta)}'\n")
+
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+         "-i", lista_path, "-c", "copy", salida_mp4],
+        check=True, capture_output=True,
+    )
 
 
 def generar_video(guion_texto: str, salida_mp4: str = "video_final.mp4"):
     plan = build_scene_plan(guion_texto)
     print(f"Guión partido en {len(plan)} escenas. Generando...\n")
 
-    clips = [construir_escena(escena, idx) for idx, escena in enumerate(plan)]
-    video_final = concatenate_videoclips(clips, method="compose")
-    video_final.write_videofile(salida_mp4, fps=24, codec="libx264",
-                                 audio_codec="aac", logger=None)
-    print(f"\n✅ Video generado: {salida_mp4} ({video_final.duration:.1f}s totales)")
+    rutas_escenas = [construir_escena(escena, idx) for idx, escena in enumerate(plan)]
+    _concatenar_archivos(rutas_escenas, salida_mp4)
+
+    print(f"\n✅ Video generado: {salida_mp4}")
     return salida_mp4
