@@ -9,18 +9,16 @@ CC-BY-NC / solo-atribución y rompen la garantía de "apto monetización".
 import os
 import requests
 
-PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
-PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY", "")
-
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 PIXABAY_VIDEO_URL = "https://pixabay.com/api/videos/"
 
 
 def search_pexels_video(query: str, per_page: int = 3) -> list[dict]:
     """Busca videos en Pexels. Requiere PEXELS_API_KEY (gratis en pexels.com/api)."""
-    if not PEXELS_API_KEY:
+    pexels_api_key = os.environ.get("PEXELS_API_KEY", "")
+    if not pexels_api_key:
         return []
-    headers = {"Authorization": PEXELS_API_KEY}
+    headers = {"Authorization": pexels_api_key}
     params = {"query": query, "per_page": per_page, "orientation": "landscape"}
     try:
         r = requests.get(PEXELS_VIDEO_URL, headers=headers, params=params, timeout=10)
@@ -45,10 +43,12 @@ def search_pexels_video(query: str, per_page: int = 3) -> list[dict]:
 
 def search_pixabay_video(query: str, per_page: int = 3) -> list[dict]:
     """Busca videos en Pixabay. Requiere PIXABAY_API_KEY (gratis en pixabay.com/api/docs)."""
-    if not PIXABAY_API_KEY:
+    pixabay_api_key = os.environ.get("PIXABAY_API_KEY", "")
+    if not pixabay_api_key:
+        print("[media_fetcher] PIXABAY_API_KEY está vacía — revisá que se haya pegado en la página.")
         return []
     params = {
-        "key": PIXABAY_API_KEY,
+        "key": pixabay_api_key,
         "q": query,
         "lang": "es",  # las keywords vienen en español, hay que avisarle a la API
         "per_page": per_page,
@@ -58,6 +58,7 @@ def search_pixabay_video(query: str, per_page: int = 3) -> list[dict]:
         r = requests.get(PIXABAY_VIDEO_URL, params=params, timeout=10)
         r.raise_for_status()
         data = r.json()
+        print(f"[media_fetcher] Pixabay '{query}' -> {data.get('totalHits', 0)} resultados")
         resultados = []
         for hit in data.get("hits", []):
             archivo = hit["videos"].get("medium") or hit["videos"].get("small")
