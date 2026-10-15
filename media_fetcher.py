@@ -50,6 +50,7 @@ def search_pixabay_video(query: str, per_page: int = 3) -> list[dict]:
     params = {
         "key": PIXABAY_API_KEY,
         "q": query,
+        "lang": "es",  # las keywords vienen en español, hay que avisarle a la API
         "per_page": per_page,
         "video_type": "all",
     }
