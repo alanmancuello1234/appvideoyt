@@ -1,0 +1,7 @@
+flask
+gunicorn
+moviepy
+edge-tts
+yake
+pillow
+requests
